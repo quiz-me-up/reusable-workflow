@@ -1,0 +1,47 @@
+name: Common java maven project workflow
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        required: false
+        type: string
+        default: '21'
+      distribution:
+        required: false
+        type: string
+        default: 'temurin'
+      maven_command:
+        required: false
+        type: string
+        default: 'install'
+
+jobs:
+  build-java-project:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.TOKEN }}
+    steps:
+      - name: Checkout project directory
+        uses: actions/checkout@v3
+        with:
+          path: java-project
+
+      - name: Checkout reusable-workflow repository
+        uses: actions/checkout@v3
+        with:
+          repository: 'quiz-me-up/reusable-workflow'
+          ref: 'master'
+          path: reusable-workflow
+
+      - name: Setup java-maven
+        uses: ./reusable-workflow/.github/actions/setup-java-maven
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.distribution }}
+
+      - name: Maven input command execution
+        working-directory: ./java-project
+        shell: bash
+        run: mvn ${{ inputs.maven_command }}
+

@@ -1,0 +1,27 @@
+name: Java maven environment setup
+
+description: "empty"
+
+inputs:
+  java-version:
+    required: false
+    description: "empty"
+    default: '21'
+  distribution:
+    required: false
+    description: "empty"
+    default: 'temurin'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup java
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: ${{ inputs.distribution }}
+        cache: 'maven'
+
+    - name: Setup maven
+      shell: bash
+      run: cp -fr ${GITHUB_ACTION_PATH}/settings.xml  /home/runner/.m2/settings.xml
