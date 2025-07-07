@@ -1,4 +1,4 @@
-name: Common java maven project workflow
+name: Common java maven project build workflow
 
 on:
   workflow_call:
@@ -11,13 +11,9 @@ on:
         required: false
         type: string
         default: 'temurin'
-      maven_command:
-        required: false
-        type: string
-        default: 'install'
 
 jobs:
-  java-project:
+  build-java-project:
     runs-on: ubuntu-latest
     env:
       GITHUB_TOKEN: ${{ secrets.TOKEN }}
@@ -43,5 +39,5 @@ jobs:
       - name: Maven input command execution
         working-directory: ./java-project
         shell: bash
-        run: mvn ${{ inputs.maven_command }}
+        run: mvn clean install
 
