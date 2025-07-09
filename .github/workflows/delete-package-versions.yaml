@@ -1,0 +1,117 @@
+name: Supprimer tous les packages Maven de l'organisation
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deletion:
+        description: 'Tapez "CONFIRM" pour confirmer la suppression'
+        required: true
+        type: string
+      dry_run:
+        description: 'Mode dry-run (simulation sans suppression)'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  list-packages:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.get-packages.outputs.packages }}
+    steps:
+      - name: Vérifier la confirmation
+        if: github.event.inputs.confirm_deletion != 'CONFIRM' && github.event.inputs.dry_run == 'false'
+        run: |
+          echo "❌ Suppression annulée - confirmation requise"
+          exit 1
+
+      - name: Lister les packages Maven
+        id: get-packages
+        run: |
+          echo "🔍 Récupération des packages Maven..."
+          
+          # Récupérer tous les packages de type Maven de l'organisation
+          packages=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/orgs/${{ github.repository_owner }}/packages?package_type=maven&per_page=100" \
+            | jq -r '.[].name')
+          
+          # Convertir en JSON array pour la matrice
+          packages_json=$(echo "$packages" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          
+          echo "packages=$packages_json" >> $GITHUB_OUTPUT
+          
+          echo "📦 Packages Maven trouvés:"
+          echo "$packages" | while read -r package; do
+            if [ -n "$package" ]; then
+              echo "  - $package"
+            fi
+          done
+
+  delete-packages:
+    needs: list-packages
+    runs-on: ubuntu-latest
+    if: needs.list-packages.outputs.packages != '[]'
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.list-packages.outputs.packages) }}
+      fail-fast: false
+    steps:
+      - name: Supprimer le package Maven
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: 'maven'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          dry-run: ${{ github.event.inputs.dry_run }}
+          min-versions-to-keep: 0
+          delete-only-untagged-versions: false
+          ignore-versions: ''
+
+      - name: Résultat de la suppression
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            echo "🔍 [DRY RUN] Package ${{ matrix.package }} - simulation terminée"
+          else
+            echo "✅ Package ${{ matrix.package }} supprimé avec succès"
+          fi
+
+  cleanup-summary:
+    needs: [list-packages, delete-packages]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Résumé de l'opération
+        run: |
+          echo "## 📋 Résumé de la suppression des packages Maven"
+          echo ""
+          
+          if [ "${{ needs.list-packages.outputs.packages }}" == "[]" ]; then
+            echo "ℹ️  Aucun package Maven trouvé dans l'organisation"
+          else
+            package_count=$(echo '${{ needs.list-packages.outputs.packages }}' | jq length)
+            echo "📦 Packages traités: $package_count"
+          
+            if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+              echo "🔍 Mode: Simulation (dry-run)"
+              echo "⚠️  Aucune suppression réelle n'a été effectuée"
+            else
+              echo "🗑️  Mode: Suppression réelle"
+              if [ "${{ needs.delete-packages.result }}" == "success" ]; then
+                echo "✅ Tous les packages ont été supprimés avec succès"
+              else
+                echo "❌ Certains packages n'ont pas pu être supprimés"
+              fi
+            fi
+          fi
+          
+          echo ""
+          echo "### 🔧 Pour relancer:"
+          echo "- En mode simulation: Laissez 'dry_run' coché"
+          echo "- En mode réel: Décochez 'dry_run' et tapez 'CONFIRM'"
+
+# Permissions requises
+permissions:
+  packages: write
+  contents: read
