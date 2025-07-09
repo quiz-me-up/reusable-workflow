@@ -12,17 +12,18 @@ on:
         required: false
         type: string
 
-# Permissions requises pour supprimer les packages
+# Permissions requises
 permissions:
   packages: write
   contents: read
-  actions: read
+
+# Variable d'environnement globale
+env:
+  GITHUB_TOKEN: ${{ secrets.TOKEN }}
 
 jobs:
   list-packages:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.TOKEN }}
     outputs:
       packages: ${{ steps.get-packages.outputs.packages }}
     steps:
@@ -39,7 +40,7 @@ jobs:
             echo "🔍 Fetching Maven packages for repository: ${{ github.event.inputs.repository_name }}"
             # Get packages from specific repository
             packages=$(curl -s \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/repos/${{ github.repository_owner }}/${{ github.event.inputs.repository_name }}/packages?package_type=maven&per_page=100" \
               | jq -r '.[].name')
@@ -47,7 +48,7 @@ jobs:
             echo "🔍 Fetching all Maven packages from organization..."
             # Get all Maven packages from the organization
             packages=$(curl -s \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/orgs/${{ github.repository_owner }}/packages?package_type=maven&per_page=100" \
               | jq -r '.[].name')
@@ -77,25 +78,34 @@ jobs:
         run: |
           echo "🗑️ Attempting to delete package: ${{ matrix.package }}"
           
-          # Use the package deletion API instead of version deletion
+          # Use the package deletion API with custom token
           response=$(curl -s -w "%{http_code}" -X DELETE \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/orgs/${{ github.repository_owner }}/packages/maven/${{ matrix.package }}")
           
           http_code="${response: -3}"
           response_body="${response%???}"
           
-          if [ "$http_code" -eq 204 ]; then
-            echo "✅ Package ${{ matrix.package }} deleted successfully"
-          elif [ "$http_code" -eq 404 ]; then
-            echo "ℹ️ Package ${{ matrix.package }} not found or already deleted"
-          else
-            echo "❌ Failed to delete package ${{ matrix.package }}"
-            echo "HTTP code: $http_code"
-            echo "Response: $response_body"
-            exit 1
-          fi
+          case $http_code in
+            204)
+              echo "✅ Package ${{ matrix.package }} deleted successfully"
+              ;;
+            403)
+              echo "❌ Permission denied for package ${{ matrix.package }}"
+              echo "Check organization permissions and token scopes"
+              exit 1
+              ;;
+            404)
+              echo "ℹ️ Package ${{ matrix.package }} not found or already deleted"
+              ;;
+            *)
+              echo "❌ Unexpected error for package ${{ matrix.package }}"
+              echo "HTTP code: $http_code"
+              echo "Response: $response_body"
+              exit 1
+              ;;
+          esac
 
       - name: Deletion result
         run: |
