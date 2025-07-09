@@ -12,6 +12,11 @@ on:
         required: false
         type: string
 
+# Permissions requises pour supprimer les packages
+permissions:
+  packages: write
+  contents: read
+
 jobs:
   list-packages:
     runs-on: ubuntu-latest
@@ -29,7 +34,6 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.repository_name }}" ]; then
             echo "🔍 Fetching Maven packages for repository: ${{ github.event.inputs.repository_name }}"
-          
             # Get packages from specific repository
             packages=$(curl -s \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -38,7 +42,6 @@ jobs:
               | jq -r '.[].name')
           else
             echo "🔍 Fetching all Maven packages from organization..."
-          
             # Get all Maven packages from the organization
             packages=$(curl -s \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -49,13 +52,12 @@ jobs:
           
           # Convert to JSON array for matrix
           packages_json=$(echo "$packages" | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          
           echo "packages=$packages_json" >> $GITHUB_OUTPUT
           
           echo "📦 Maven packages found:"
           echo "$packages" | while read -r package; do
             if [ -n "$package" ]; then
-              echo "  - $package"
+              echo " - $package"
             fi
           done
 
@@ -69,18 +71,32 @@ jobs:
       fail-fast: false
     steps:
       - name: Delete Maven package
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: ${{ matrix.package }}
-          package-type: 'maven'
-          owner: ${{ github.repository_owner }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          min-versions-to-keep: 0
-          delete-only-untagged-versions: false
+        run: |
+          echo "🗑️ Attempting to delete package: ${{ matrix.package }}"
+          
+          # Use the package deletion API instead of version deletion
+          response=$(curl -s -w "%{http_code}" -X DELETE \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/orgs/${{ github.repository_owner }}/packages/maven/${{ matrix.package }}")
+          
+          http_code="${response: -3}"
+          response_body="${response%???}"
+          
+          if [ "$http_code" -eq 204 ]; then
+            echo "✅ Package ${{ matrix.package }} deleted successfully"
+          elif [ "$http_code" -eq 404 ]; then
+            echo "ℹ️ Package ${{ matrix.package }} not found or already deleted"
+          else
+            echo "❌ Failed to delete package ${{ matrix.package }}"
+            echo "HTTP code: $http_code"
+            echo "Response: $response_body"
+            exit 1
+          fi
 
       - name: Deletion result
         run: |
-          echo "✅ Package ${{ matrix.package }} deleted successfully"
+          echo "📋 Processing completed for package: ${{ matrix.package }}"
 
   cleanup-summary:
     needs: [list-packages, delete-packages]
@@ -93,25 +109,28 @@ jobs:
           echo ""
           
           if [ -n "${{ github.event.inputs.repository_name }}" ]; then
-            echo "🎯 Target: Repository '${{ github.event.inputs.repository_name }}'"
+            echo "🎯 **Target**: Repository '${{ github.event.inputs.repository_name }}'"
           else
-            echo "🎯 Target: All organization packages"
+            echo "🎯 **Target**: All organization packages"
           fi
+          
+          echo ""
           
           if [ "${{ needs.list-packages.outputs.packages }}" == "[]" ]; then
-            echo "ℹ️  No Maven packages found"
+            echo "ℹ️ **Result**: No Maven packages found"
           else
             package_count=$(echo '${{ needs.list-packages.outputs.packages }}' | jq length)
-            echo "📦 Packages processed: $package_count"
+            echo "📦 **Packages processed**: $package_count"
+            echo ""
           
             if [ "${{ needs.delete-packages.result }}" == "success" ]; then
-              echo "✅ All packages deleted successfully"
+              echo "✅ **Status**: All packages deleted successfully"
+            elif [ "${{ needs.delete-packages.result }}" == "failure" ]; then
+              echo "❌ **Status**: Some packages could not be deleted"
             else
-              echo "❌ Some packages could not be deleted"
+              echo "⚠️ **Status**: Deletion process was cancelled or skipped"
             fi
           fi
-
-# Required permissions
-permissions:
-  packages: write
-  contents: read
+          
+          echo ""
+          echo "🕐 **Completed at**: $(date)"
