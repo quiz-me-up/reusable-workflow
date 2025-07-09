@@ -1,5 +1,4 @@
 name: 'Generate Next Version'
-
 description: 'Generate the next semantic version based on release type'
 
 inputs:
@@ -42,13 +41,21 @@ runs:
       id: select_version
       shell: bash
       run: |
-        if [ "${{ inputs.release_type }}" = "major" ]; then
-          echo "version=${{ steps.version.outputs.major }}" >> $GITHUB_OUTPUT
-          echo "full_version=${{ steps.version.outputs.v_major }}" >> $GITHUB_OUTPUT
-        elif [ "${{ inputs.release_type }}" = "minor" ]; then
-          echo "version=${{ steps.version.outputs.minor }}" >> $GITHUB_OUTPUT
-          echo "full_version=${{ steps.version.outputs.v_minor }}" >> $GITHUB_OUTPUT
-        elif [ "${{ inputs.release_type }}" = "patch" ]; then
-          echo "version=${{ steps.version.outputs.patch }}" >> $GITHUB_OUTPUT
-          echo "full_version=${{ steps.version.outputs.v_patch }}" >> $GITHUB_OUTPUT
-        fi
+        case "${{ inputs.release_type }}" in
+          "major")
+            echo "version=${{ steps.version.outputs.major }}" >> $GITHUB_OUTPUT
+            echo "full_version=${{ steps.version.outputs.v_major }}" >> $GITHUB_OUTPUT
+            ;;
+          "minor")
+            echo "version=${{ steps.version.outputs.minor }}" >> $GITHUB_OUTPUT
+            echo "full_version=${{ steps.version.outputs.v_minor }}" >> $GITHUB_OUTPUT
+            ;;
+          "patch")
+            echo "version=${{ steps.version.outputs.patch }}" >> $GITHUB_OUTPUT
+            echo "full_version=${{ steps.version.outputs.v_patch }}" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "::error::Invalid release type: ${{ inputs.release_type }}"
+            exit 1
+            ;;
+        esac
