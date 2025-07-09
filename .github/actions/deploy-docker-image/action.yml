@@ -1,0 +1,47 @@
+name: deploy docker image
+
+description: "empty"
+
+inputs:
+  artefact_name:
+    required: false
+    description: "artefact name reference"
+  artefact_version:
+    required: false
+    description: "artefact version reference"
+  docker_hub_username:
+    required: true
+    description: "docker hub username"
+  docker_hub_token:
+    required: true
+    description: "docker hub token"
+  working-directory:
+    required: false
+    description: "empty"
+    default: '.'
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/download-artifact@v3
+      with:
+        name: ${{ inputs.artefact_name }}-${{ inputs.artefact_version }}
+        path: ${{ github.action_path }}
+
+    - name: Display structure of downloaded files
+      working-directory: ${{ github.action_path }}
+      shell: bash
+      run: ls -R
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ inputs.docker_hub_username }}
+        password: ${{ inputs.docker_hub_token }}
+
+    - name: Setup maven
+      working-directory: ${{ github.action_path }}
+      shell: bash
+      run: |
+        docker build -t bettorleague/${{ inputs.artefact_name }}:${{ inputs.artefact_version }} . --build-arg ARTIFACT_NAME=${{ inputs.artefact_name }}-${{ inputs.artefact_version }}.jar
+        docker push bettorleague/${{ inputs.artefact_name }}:${{ inputs.artefact_version }}

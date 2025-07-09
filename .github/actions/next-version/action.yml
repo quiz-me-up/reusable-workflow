@@ -1,0 +1,54 @@
+name: 'Generate Next Version'
+
+description: 'Generate the next semantic version based on release type'
+
+inputs:
+  release_type:
+    description: 'Release type (major, minor, patch)'
+    required: true
+    default: 'patch'
+  fallback_version:
+    description: 'Fallback version if no previous tag exists'
+    required: false
+    default: '1.0.0'
+
+outputs:
+  version:
+    description: 'The next version number (e.g., 1.2.3)'
+    value: ${{ steps.select_version.outputs.version }}
+  full_version:
+    description: 'The next version with v prefix (e.g., v1.2.3)'
+    value: ${{ steps.select_version.outputs.full_version }}
+  previous_tag:
+    description: 'The previous tag'
+    value: ${{ steps.tag.outputs.tag }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get previous tag
+      id: tag
+      uses: WyriHaximus/github-action-get-previous-tag@v1
+      with:
+        fallback: ${{ inputs.fallback_version }}
+
+    - name: Get version
+      id: version
+      uses: WyriHaximus/github-action-next-semvers@v1
+      with:
+        version: ${{ steps.tag.outputs.tag }}
+
+    - name: Select version
+      id: select_version
+      shell: bash
+      run: |
+        if [ "${{ inputs.release_type }}" = "major" ]; then
+          echo "version=${{ steps.version.outputs.major }}" >> $GITHUB_OUTPUT
+          echo "full_version=${{ steps.version.outputs.v_major }}" >> $GITHUB_OUTPUT
+        elif [ "${{ inputs.release_type }}" = "minor" ]; then
+          echo "version=${{ steps.version.outputs.minor }}" >> $GITHUB_OUTPUT
+          echo "full_version=${{ steps.version.outputs.v_minor }}" >> $GITHUB_OUTPUT
+        elif [ "${{ inputs.release_type }}" = "patch" ]; then
+          echo "version=${{ steps.version.outputs.patch }}" >> $GITHUB_OUTPUT
+          echo "full_version=${{ steps.version.outputs.v_patch }}" >> $GITHUB_OUTPUT
+        fi
