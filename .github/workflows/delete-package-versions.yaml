@@ -16,10 +16,13 @@ on:
 permissions:
   packages: write
   contents: read
+  actions: read
 
 jobs:
   list-packages:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.TOKEN }}
     outputs:
       packages: ${{ steps.get-packages.outputs.packages }}
     steps:
