@@ -1,18 +1,12 @@
-# ARG pour définir le chemin vers le dossier target
-ARG TARGET_DIR=target
-
-# ARG pour la configuration JVM
-ARG XMX=512m
-ARG XMS=256m
-
-# ARG pour les profils Spring
-ARG SPRING_PROFILES=docker
-
-# ARG pour le port
-ARG PORT=8080
-
 # Utiliser l'image de base Eclipse Temurin JRE 21 Alpine (plus légère)
 FROM eclipse-temurin:21-jre-alpine
+
+# Re-déclarer les ARG après FROM (obligatoire pour les utiliser)
+ARG TARGET_DIR=target
+ARG XMX=512m
+ARG XMS=256m
+ARG SPRING_PROFILES=docker
+ARG PORT=8080
 
 # Créer un utilisateur non-root pour la sécurité
 RUN addgroup -g 1001 -S appgroup && \
