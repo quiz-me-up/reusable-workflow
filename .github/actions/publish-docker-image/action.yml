@@ -43,7 +43,7 @@ inputs:
     description: 'Docker Hub access token'
     required: true
   encrypt_key:
-    description: 'Docker Hub access token'
+    description: 'QuizMeUp encrypt key'
     required: true
 runs:
   using: 'composite'
