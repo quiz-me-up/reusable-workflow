@@ -16,7 +16,7 @@ jobs:
   build-java-project:
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_GITHUB_TOKEN }}
     steps:
       - name: Checkout project directory
         uses: actions/checkout@v3

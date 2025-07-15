@@ -42,7 +42,9 @@ inputs:
   dockerhub_token:
     description: 'Docker Hub access token'
     required: true
-
+  encrypt_key:
+    description: 'Docker Hub access token'
+    required: true
 runs:
   using: 'composite'
   steps:
@@ -90,6 +92,7 @@ runs:
           XMS=${{ inputs.java_xms }}
           SPRING_PROFILES=${{ inputs.spring_profiles }}
           PORT=${{ inputs.app_port }}
+          QUIZ_ME_UP_ENCRYPT_KEY=${{ inputs.encrypt_key }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 

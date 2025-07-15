@@ -7,6 +7,7 @@ ARG XMX=512m
 ARG XMS=256m
 ARG SPRING_PROFILES=docker
 ARG PORT=8080
+ARG QUIZ_ME_UP_ENCRYPT_KEY
 
 # Créer un utilisateur non-root pour la sécurité
 RUN addgroup -g 1001 -S appgroup && \
@@ -31,6 +32,7 @@ EXPOSE ${PORT}
 ENV SPRING_PROFILES_ACTIVE=${SPRING_PROFILES}
 ENV JAVA_OPTS="-Xmx${XMX} -Xms${XMS}"
 ENV SERVER_PORT=${PORT}
+ENV QUIZ_ME_UP_ENCRYPT_KEY=${QUIZ_ME_UP_ENCRYPT_KEY}
 
 # Point d'entrée de l'application
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

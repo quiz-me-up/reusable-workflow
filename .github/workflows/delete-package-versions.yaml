@@ -19,7 +19,7 @@ permissions:
 
 # Variable d'environnement globale
 env:
-  GITHUB_TOKEN: ${{ secrets.TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_GITHUB_TOKEN }}
 
 jobs:
   list-packages:
