@@ -1,0 +1,58 @@
+name: 'Generate Changelog'
+description: 'Génère un changelog Markdown depuis la version précédente, en listant les commits et contributeurs.'
+
+inputs:
+  branch:
+    description: 'Branche à utiliser pour générer le changelog (par défaut: HEAD)'
+    required: false
+    default: 'HEAD'
+  commit-format:
+    description: 'Format Git pour les commits (par défaut: "* %h - %s (par %an)")'
+    required: false
+    default: '* %h - %s (par %an)'
+  next_version:
+    description: 'Version suivante pour le lien "Full changelog" (optionnel). Si fourni, ajoute un lien vers GitHub compare.'
+    required: false
+
+outputs:
+  changelog:
+    description: 'Le changelog généré en format Markdown (échappé pour multiline)'
+    value: ${{ steps.generate.outputs.changelog }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate changelog
+      id: generate
+      shell: bash
+      run: |
+        # Trouver le dernier tag (version précédente)
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "No previous tag")
+        
+        if [ "$PREVIOUS_TAG" == "No previous tag" ]; then
+          echo "Aucun tag précédent trouvé. Changelog vide pour la première release."
+          CHANGELOG="### Première release\nAucun changement précédent."
+        else
+          # Générer la liste des commits avec hash, message et auteur (utilise l'input pour le format)
+          COMMITS=$(git log --pretty=format:"${{ inputs.commit-format }}" $PREVIOUS_TAG..${{ inputs.branch }})
+        
+          # Liste unique des contributeurs
+          CONTRIBUTORS=$(git log --pretty=format:"%an" $PREVIOUS_TAG..${{ inputs.branch }} | sort | uniq | awk '{print "- " $0}' | paste -sd "\n" -)
+        
+          # Formater le changelog en Markdown
+          CHANGELOG="### Changements depuis $PREVIOUS_TAG\n\n#### Commits:\n$COMMITS\n\n#### Contributeurs:\n$CONTRIBUTORS"
+        
+          # NOUVEAU: Ajouter le lien "Full changelog" si next_version est fourni
+          if [ ! -z "${{ inputs.next_version }}" ]; then
+            LINK="[Full changelog: $PREVIOUS_TAG -> ${{ inputs.next_version }}](https://github.com/${GITHUB_REPOSITORY}/compare/$PREVIOUS_TAG...${{ inputs.next_version }})"
+            CHANGELOG="$CHANGELOG\n\n$LINK"
+          fi
+        fi
+        
+        # Échapper les caractères spéciaux pour l'output (multiline)
+        CHANGELOG="${CHANGELOG//'%'/'%25'}"
+        CHANGELOG="${CHANGELOG//$'\n'/'%0A'}"
+        CHANGELOG="${CHANGELOG//$'\r'/'%0D'}"
+        
+        # Définir l'output pour l'utiliser plus tard
+        echo "changelog=$CHANGELOG" >> $GITHUB_OUTPUT
