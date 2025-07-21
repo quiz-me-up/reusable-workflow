@@ -31,7 +31,6 @@ EXPOSE ${PORT}
 ENV SPRING_PROFILES_ACTIVE=${SPRING_PROFILES}
 ENV JAVA_OPTS="-Xmx${XMX} -Xms${XMS}"
 ENV SERVER_PORT=${PORT}
-ENV QUIZ_ME_UP_ENCRYPT_KEY=""
 
 # Point d'entrée de l'application
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
