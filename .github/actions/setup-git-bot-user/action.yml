@@ -1,5 +1,4 @@
-name: Git bot user setup
-
+name: "Setup github bot user"
 description: "empty"
 
 runs:
