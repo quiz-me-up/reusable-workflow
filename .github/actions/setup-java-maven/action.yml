@@ -11,10 +11,6 @@ inputs:
     required: false
     description: "empty"
     default: 'temurin'
-  settings-xml:
-    required: false
-    description: "Contenu du fichier settings.xml Maven"
-    default: ''
 
 runs:
   using: "composite"
@@ -28,5 +24,5 @@ runs:
 
     - name: Setup maven
       shell: bash
-      run: echo "${{ inputs.settings-xml }}" > /home/runner/.m2/settings.xml
-#      run: cp -fr ${GITHUB_ACTION_PATH}/settings.xml  /home/runner/.m2/settings.xml
+#      run: echo "${{ inputs.settings-xml }}" > /home/runner/.m2/settings.xml
+      run: cp -fr ${GITHUB_ACTION_PATH}/settings.xml  /home/runner/.m2/settings.xml
