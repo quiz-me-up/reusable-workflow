@@ -11,10 +11,6 @@ inputs:
     required: false
     description: "empty"
     default: 'temurin'
-  settings_xml:
-    required: false
-    description: "Contenu du fichier settings.xml à utiliser pour Maven"
-    default: ''
 
 runs:
   using: "composite"
@@ -27,7 +23,6 @@ runs:
         cache: 'maven'
 
     - name: Setup maven
-      if: ${{ inputs.settings_xml != '' }}
       shell: bash
-      run: echo "${{ inputs.settings_xml }}" > /home/runner/.m2/settings.xml
+      run: echo "${{ vars.QUIZ_ME_UP_MAVEN_SETTINGS_XML }}" > /home/runner/.m2/settings.xml
 #      run: cp -fr ${GITHUB_ACTION_PATH}/settings.xml  /home/runner/.m2/settings.xml

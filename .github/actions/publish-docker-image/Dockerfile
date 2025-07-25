@@ -13,7 +13,7 @@ RUN addgroup -g 1001 -S appgroup && \
     adduser -S appuser -u 1001 -G appgroup
 
 # Définir le répertoire de travail
-WORKDIR /app
+WORKDIR /usr/src/app
 
 # Copier le JAR depuis le chemin spécifié
 COPY ${TARGET_DIR}/*.jar app.jar
