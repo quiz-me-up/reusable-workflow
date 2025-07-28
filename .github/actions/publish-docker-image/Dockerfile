@@ -5,7 +5,7 @@ FROM eclipse-temurin:21-jre-alpine
 ARG TARGET_DIR=target
 ARG XMX=512m
 ARG XMS=256m
-ARG SPRING_PROFILES=docker
+ARG SPRING_PROFILES=production
 ARG PORT=8080
 
 # Créer un utilisateur non-root pour la sécurité

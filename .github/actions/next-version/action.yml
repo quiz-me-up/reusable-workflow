@@ -9,7 +9,7 @@ inputs:
   fallback_version:
     description: 'Fallback version if no previous tag exists'
     required: false
-    default: '1.0.0'
+    default: '0.0.0'
 
 outputs:
   version:
