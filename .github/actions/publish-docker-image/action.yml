@@ -20,22 +20,6 @@ inputs:
     description: 'Target directory for JAR file'
     required: false
     default: 'target'
-  java_xmx:
-    description: 'JVM max memory'
-    required: false
-    default: '512m'
-  java_xms:
-    description: 'JVM initial memory'
-    required: false
-    default: '256m'
-  spring_profiles:
-    description: 'Spring profiles'
-    required: false
-    default: 'docker'
-  app_port:
-    description: 'Application port'
-    required: false
-    default: '8080'
   dockerhub_username:
     description: 'Docker Hub username'
     required: true
@@ -85,10 +69,6 @@ runs:
         labels: ${{ steps.meta.outputs.labels }}
         build-args: |
           TARGET_DIR=${{ inputs.target_dir }}
-          XMX=${{ inputs.java_xmx }}
-          XMS=${{ inputs.java_xms }}
-          SPRING_PROFILES=${{ inputs.spring_profiles }}
-          PORT=${{ inputs.app_port }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 

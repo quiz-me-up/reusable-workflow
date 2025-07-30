@@ -3,10 +3,6 @@ FROM eclipse-temurin:21-jre-alpine
 
 # Re-déclarer les ARG après FROM (obligatoire pour les utiliser)
 ARG TARGET_DIR=target
-ARG XMX=512m
-ARG XMS=256m
-ARG SPRING_PROFILES=production
-ARG PORT=8080
 
 # Créer un utilisateur non-root pour la sécurité
 RUN addgroup -g 1001 -S appgroup && \
@@ -24,13 +20,5 @@ RUN chown appuser:appgroup app.jar
 # Basculer vers l'utilisateur non-root
 USER appuser
 
-# Exposer le port configuré
-EXPOSE ${PORT}
-
-# Variables d'environnement
-ENV SPRING_PROFILES_ACTIVE=${SPRING_PROFILES}
-ENV JAVA_OPTS="-Xmx${XMX} -Xms${XMS}"
-ENV SERVER_PORT=${PORT}
-
 # Point d'entrée de l'application
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["sh", "-c", "java -jar app.jar"]
