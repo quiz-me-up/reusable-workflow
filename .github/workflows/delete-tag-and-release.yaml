@@ -41,20 +41,254 @@ jobs:
             repositories='["${{ github.event.inputs.repository_name }}"]'
           else
             echo "🔍 Fetching all repositories from organization..."
-            # Get all repositories from the organization
-            repositories=$(curl -s \
+          
+            # Get all repositories from the organization with pagination
+            all_repos=""
+            page=1
+            while true; do
+              repos_page=$(curl -s \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/orgs/${{ github.repository_owner }}/repos?per_page=100&page=$page&type=all")
+          
+              # Check if the response is valid JSON
+              if ! echo "$repos_page" | jq empty 2>/dev/null; then
+                echo "❌ Error: Invalid JSON response from GitHub API"
+                echo "Response: $repos_page"
+                exit 1
+              fi
+          
+              # Check if we got any repositories
+              repo_count=$(echo "$repos_page" | jq length)
+              if [ "$repo_count" -eq 0 ]; then
+                break
+              fi
+          
+              # Extract repository names and add to our list
+              repo_names=$(echo "$repos_page" | jq -r '.[].name')
+              if [ -z "$all_repos" ]; then
+                all_repos="$repo_names"
+              else
+                all_repos="$all_repos"
+
+  process-repositories:
+    needs: list-repositories
+    runs-on: ubuntu-latest
+    if: needs.list-repositories.outputs.repositories != '[]'
+    strategy:
+      matrix:
+        repository: ${{ fromJson(needs.list-repositories.outputs.repositories) }}
+      fail-fast: false
+    steps:
+      - name: Process releases and tags for repository
+        run: |
+          echo "🗂️ Processing repository: ${{ matrix.repository }}"
+          
+          # Get all releases with pagination
+          echo "🔍 Fetching releases..."
+          all_releases=""
+          page=1
+          while true; do
+            releases_page=$(curl -s \
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/orgs/${{ github.repository_owner }}/repos?per_page=100&type=all" \
-              | jq -r '[.[].name]')
+              "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/releases?per_page=100&page=$page")
+          
+            # Check if the response is valid JSON
+            if ! echo "$releases_page" | jq empty 2>/dev/null; then
+              echo "❌ Error: Invalid JSON response for releases"
+              echo "Response: $releases_page"
+              exit 1
+            fi
+          
+            release_count=$(echo "$releases_page" | jq length)
+            if [ "$release_count" -eq 0 ]; then
+              break
+            fi
+          
+            if [ -z "$all_releases" ]; then
+              all_releases="$releases_page"
+            else
+              all_releases=$(echo "$all_releases" "$releases_page" | jq -s 'add')
+            fi
+          
+            page=$((page + 1))
+            if [ "$release_count" -lt 100 ]; then
+              break
+            fi
+          done
+          
+          if [ -z "$all_releases" ]; then
+            all_releases="[]"
+          fi
+          
+          releases_count=$(echo "$all_releases" | jq length)
+          echo "📋 Found $releases_count releases"
+          
+          # Delete releases
+          if [ "$releases_count" -gt 0 ]; then
+            echo "🔄 Mode: Delete all releases..."
+            deleted_releases=0
+            echo "$all_releases" | jq -r '.[] | "\(.id) \(.tag_name // "no-tag") \(.name // "unnamed")"' | while IFS=' ' read -r release_id tag_name release_name; do
+              echo "🗑️ Deleting release: $release_name (ID: $release_id, Tag: $tag_name)"
+              response=$(curl -s -w "%{http_code}" -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/releases/$release_id")
+          
+              http_code="${response: -3}"
+              if [ "$http_code" == "204" ]; then
+                echo "✅ Release deleted: $release_name"
+                deleted_releases=$((deleted_releases + 1))
+              else
+                echo "❌ Error deleting release $release_name (HTTP $http_code)"
+              fi
+            done
+          
+            echo "📊 Deleted $deleted_releases releases from ${{ matrix.repository }}"
+          else
+            echo "ℹ️ No releases found in ${{ matrix.repository }}"
+          fi
+          
+          # Delete tags with pagination
+          echo "🔍 Fetching tags..."
+          all_tags=""
+          page=1
+          while true; do
+            tags_page=$(curl -s \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/tags?per_page=100&page=$page")
+          
+            # Check if the response is valid JSON
+            if ! echo "$tags_page" | jq empty 2>/dev/null; then
+              echo "❌ Error: Invalid JSON response for tags"
+              echo "Response: $tags_page"
+              exit 1
+            fi
+          
+            tag_count=$(echo "$tags_page" | jq length)
+            if [ "$tag_count" -eq 0 ]; then
+              break
+            fi
+          
+            if [ -z "$all_tags" ]; then
+              all_tags="$tags_page"
+            else
+              all_tags=$(echo "$all_tags" "$tags_page" | jq -s 'add')
+            fi
+          
+            page=$((page + 1))
+            if [ "$tag_count" -lt 100 ]; then
+              break
+            fi
+          done
+          
+          if [ -z "$all_tags" ]; then
+            all_tags="[]"
+          fi
+          
+          tags_count=$(echo "$all_tags" | jq length)
+          echo "🏷️ Found $tags_count tags"
+          
+          if [ "$tags_count" -gt 0 ]; then
+            deleted_tags=0
+            echo "$all_tags" | jq -r '.[].name' | while read -r tag_name; do
+              echo "🗑️ Deleting tag: $tag_name"
+              response=$(curl -s -w "%{http_code}" -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/git/refs/tags/$tag_name")
+          
+              http_code="${response: -3}"
+              if [ "$http_code" == "204" ]; then
+                echo "✅ Tag deleted: $tag_name"
+                deleted_tags=$((deleted_tags + 1))
+              elif [ "$http_code" == "422" ]; then
+                echo "ℹ️ Tag $tag_name not found or already deleted"
+              else
+                echo "❌ Error deleting tag $tag_name (HTTP $http_code)"
+              fi
+            done
+          
+            echo "📊 Deleted $deleted_tags tags from ${{ matrix.repository }}"
+          else
+            echo "ℹ️ No tags found in ${{ matrix.repository }}"
+          fi
+
+      - name: Repository processing result
+        run: |
+          echo "📋 Processing completed for repository: ${{ matrix.repository }}"
+
+  cleanup-summary:
+    needs: [list-repositories, process-repositories]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Operation summary
+        run: |
+          echo "## 📋 Tags and releases deletion summary"
+          echo ""
+          
+          if [ -n "${{ github.event.inputs.repository_name }}" ]; then
+            echo "🎯 **Target**: Repository '${{ github.event.inputs.repository_name }}'"
+          else
+            echo "🎯 **Target**: All organization repositories"
+          fi
+          
+          echo "⚙️ **Mode**: Delete all releases and tags"
+          echo ""
+          
+          if [ "${{ needs.list-repositories.outputs.repositories }}" == "[]" ]; then
+            echo "ℹ️ **Result**: No repositories found"
+          else
+            repo_count=$(echo '${{ needs.list-repositories.outputs.repositories }}' | jq length)
+            echo "📁 **Repositories processed**: $repo_count"
+            echo ""
+          
+            if [ "${{ needs.process-repositories.result }}" == "success" ]; then
+              echo "✅ **Status**: Process completed successfully"
+            elif [ "${{ needs.process-repositories.result }}" == "failure" ]; then
+              echo "❌ **Status**: Some errors occurred during deletion"
+            else
+              echo "⚠️ **Status**: Process was cancelled or skipped"
+            fi
+          fi
+          
+          echo ""
+          echo "🗑️ **Actions**: Deleted all releases and tags"
+          
+          echo ""
+          echo "🕐 **Completed at**: $(date)"\n'"$repo_names"
+              fi
+          
+              echo "📄 Fetched $repo_count repositories from page $page"
+              page=$((page + 1))
+          
+              # Break if we got less than 100 repos (last page)
+              if [ "$repo_count" -lt 100 ]; then
+                break
+              fi
+            done
+          
+            # Convert to JSON array
+            if [ -n "$all_repos" ]; then
+              repositories=$(echo "$all_repos" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            else
+              repositories='[]'
+            fi
           fi
           
           echo "repositories=$repositories" >> $GITHUB_OUTPUT
           
           echo "📁 Repositories to process:"
-          echo "$repositories" | jq -r '.[]' | while read -r repo; do
-            echo " - $repo"
-          done
+          if [ "$repositories" != "[]" ]; then
+            echo "$repositories" | jq -r '.[]' | while read -r repo; do
+              echo " - $repo"
+            done
+          else
+            echo " - No repositories found"
+          fi
 
   process-repositories:
     needs: list-repositories
