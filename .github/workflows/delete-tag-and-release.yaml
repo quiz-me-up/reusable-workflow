@@ -1,0 +1,185 @@
+name: Delete all tags and releases from organization
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deletion:
+        description: 'Type "CONFIRM" to confirm deletion'
+        required: true
+        type: string
+      repository_name:
+        description: 'Repository name (optional - if empty, processes all org repositories)'
+        required: false
+        type: string
+
+# Permissions requises
+permissions:
+  contents: write
+  actions: read
+
+# Variable d'environnement globale
+env:
+  GITHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_GITHUB_TOKEN }}
+
+jobs:
+  list-repositories:
+    runs-on: ubuntu-latest
+    outputs:
+      repositories: ${{ steps.get-repositories.outputs.repositories }}
+    steps:
+      - name: Verify confirmation
+        if: github.event.inputs.confirm_deletion != 'CONFIRM'
+        run: |
+          echo "❌ Deletion cancelled - confirmation required"
+          exit 1
+
+      - name: List repositories
+        id: get-repositories
+        run: |
+          if [ -n "${{ github.event.inputs.repository_name }}" ]; then
+            echo "🔍 Processing specific repository: ${{ github.event.inputs.repository_name }}"
+            repositories='["${{ github.event.inputs.repository_name }}"]'
+          else
+            echo "🔍 Fetching all repositories from organization..."
+            # Get all repositories from the organization
+            repositories=$(curl -s \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/orgs/${{ github.repository_owner }}/repos?per_page=100&type=all" \
+              | jq -r '[.[].name]')
+          fi
+          
+          echo "repositories=$repositories" >> $GITHUB_OUTPUT
+          
+          echo "📁 Repositories to process:"
+          echo "$repositories" | jq -r '.[]' | while read -r repo; do
+            echo " - $repo"
+          done
+
+  process-repositories:
+    needs: list-repositories
+    runs-on: ubuntu-latest
+    if: needs.list-repositories.outputs.repositories != '[]'
+    strategy:
+      matrix:
+        repository: ${{ fromJson(needs.list-repositories.outputs.repositories) }}
+      fail-fast: false
+    steps:
+      - name: Process releases and tags for repository
+        run: |
+          echo "🗂️ Processing repository: ${{ matrix.repository }}"
+          
+          # Get all releases
+          echo "🔍 Fetching releases..."
+          releases=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/releases?per_page=100")
+          
+          releases_count=$(echo "$releases" | jq length)
+          echo "📋 Found $releases_count releases"
+          
+          # Delete releases
+          if [ "$releases_count" -gt 0 ]; then
+            echo "🔄 Mode: Delete all releases..."
+            deleted_releases=0
+            echo "$releases" | jq -r '.[] | "\(.id) \(.tag_name) \(.name)"' | while IFS=' ' read -r release_id tag_name release_name; do
+              echo "🗑️ Deleting release: $release_name (ID: $release_id, Tag: $tag_name)"
+              response=$(curl -s -w "%{http_code}" -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/releases/$release_id")
+          
+              http_code="${response: -3}"
+              if [ "$http_code" == "204" ]; then
+                echo "✅ Release deleted: $release_name"
+                deleted_releases=$((deleted_releases + 1))
+              else
+                echo "❌ Error deleting release $release_name (HTTP $http_code)"
+              fi
+            done
+          
+            echo "📊 Deleted $deleted_releases releases from ${{ matrix.repository }}"
+          else
+            echo "ℹ️ No releases found in ${{ matrix.repository }}"
+          fi
+          
+          # Delete tags
+          echo "🔍 Fetching tags..."
+          tags=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/tags?per_page=100")
+          
+          tags_count=$(echo "$tags" | jq length)
+          echo "🏷️ Found $tags_count tags"
+          
+          if [ "$tags_count" -gt 0 ]; then
+            deleted_tags=0
+            echo "$tags" | jq -r '.[].name' | while read -r tag_name; do
+              echo "🗑️ Deleting tag: $tag_name"
+              response=$(curl -s -w "%{http_code}" -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository_owner }}/${{ matrix.repository }}/git/refs/tags/$tag_name")
+          
+              http_code="${response: -3}"
+              if [ "$http_code" == "204" ]; then
+                echo "✅ Tag deleted: $tag_name"
+                deleted_tags=$((deleted_tags + 1))
+              elif [ "$http_code" == "422" ]; then
+                echo "ℹ️ Tag $tag_name not found or already deleted"
+              else
+                echo "❌ Error deleting tag $tag_name (HTTP $http_code)"
+              fi
+            done
+          
+            echo "📊 Deleted $deleted_tags tags from ${{ matrix.repository }}"
+          else
+            echo "ℹ️ No tags found in ${{ matrix.repository }}"
+          fi
+
+      - name: Repository processing result
+        run: |
+          echo "📋 Processing completed for repository: ${{ matrix.repository }}"
+
+  cleanup-summary:
+    needs: [list-repositories, process-repositories]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Operation summary
+        run: |
+          echo "## 📋 Tags and releases deletion summary"
+          echo ""
+          
+          if [ -n "${{ github.event.inputs.repository_name }}" ]; then
+            echo "🎯 **Target**: Repository '${{ github.event.inputs.repository_name }}'"
+          else
+            echo "🎯 **Target**: All organization repositories"
+          fi
+          
+          echo "⚙️ **Mode**: Delete all releases and tags"
+          echo ""
+          
+          if [ "${{ needs.list-repositories.outputs.repositories }}" == "[]" ]; then
+            echo "ℹ️ **Result**: No repositories found"
+          else
+            repo_count=$(echo '${{ needs.list-repositories.outputs.repositories }}' | jq length)
+            echo "📁 **Repositories processed**: $repo_count"
+            echo ""
+          
+            if [ "${{ needs.process-repositories.result }}" == "success" ]; then
+              echo "✅ **Status**: Process completed successfully"
+            elif [ "${{ needs.process-repositories.result }}" == "failure" ]; then
+              echo "❌ **Status**: Some errors occurred during deletion"
+            else
+              echo "⚠️ **Status**: Process was cancelled or skipped"
+            fi
+          fi
+          
+          echo ""
+          echo "🗑️ **Actions**: Deleted all releases and tags"
+          
+          echo ""
+          echo "🕐 **Completed at**: $(date)"

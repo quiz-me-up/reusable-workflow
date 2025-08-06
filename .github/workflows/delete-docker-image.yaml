@@ -1,0 +1,198 @@
+name: Delete all Docker Hub images from organization
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deletion:
+        description: 'Type "CONFIRM" to confirm deletion'
+        required: true
+        type: string
+      repository_name:
+        description: 'Repository name (optional - if empty, deletes all org repositories)'
+        required: false
+        type: string
+
+# Permissions requises
+permissions:
+  contents: read
+
+# Variables d'environnement globales
+env:
+  DOCKERHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_DOCKER_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.QUIZ_ME_UP_DOCKER_USERNAME }}
+  DOCKERHUB_NAMESPACE: ${{ secrets.QUIZ_ME_UP_DOCKER_NAMESPACE }}
+
+jobs:
+  list-repositories:
+    runs-on: ubuntu-latest
+    outputs:
+      repositories: ${{ steps.get-repositories.outputs.repositories }}
+      auth_token: ${{ steps.docker-auth.outputs.auth_token }}
+    steps:
+      - name: Verify confirmation
+        if: github.event.inputs.confirm_deletion != 'CONFIRM'
+        run: |
+          echo "❌ Deletion cancelled - confirmation required"
+          exit 1
+
+      - name: Authenticate with Docker Hub
+        id: docker-auth
+        run: |
+          echo "🔐 Authenticating with Docker Hub..."
+          
+          # Get authentication token
+          response=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
+            "https://hub.docker.com/v2/users/login/")
+          
+          auth_token=$(echo "$response" | jq -r '.token')
+          
+          if [ "$auth_token" == "null" ] || [ -z "$auth_token" ]; then
+            echo "❌ Failed to authenticate with Docker Hub"
+            echo "Response: $response"
+            exit 1
+          fi
+          
+          echo "✅ Successfully authenticated with Docker Hub"
+          echo "auth_token=$auth_token" >> $GITHUB_OUTPUT
+
+      - name: List Docker Hub repositories
+        id: get-repositories
+        run: |
+          if [ -n "${{ github.event.inputs.repository_name }}" ]; then
+            echo "🔍 Processing specific repository: ${{ github.event.inputs.repository_name }}"
+            repositories='["${{ github.event.inputs.repository_name }}"]'
+          else
+            echo "🔍 Fetching all repositories from Docker Hub namespace: $DOCKERHUB_NAMESPACE"
+          
+            # Get all repositories from the namespace
+            repositories_response=$(curl -s \
+              -H "Authorization: JWT ${{ steps.docker-auth.outputs.auth_token }}" \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/?page_size=100")
+          
+            repositories=$(echo "$repositories_response" | jq -r '[.results[].name]')
+          
+            if [ "$repositories" == "null" ]; then
+              echo "❌ Failed to fetch repositories"
+              echo "Response: $repositories_response"
+              exit 1
+            fi
+          fi
+          
+          echo "repositories=$repositories" >> $GITHUB_OUTPUT
+          
+          echo "🐳 Docker repositories to process:"
+          echo "$repositories" | jq -r '.[]' | while read -r repo; do
+            echo " - $DOCKERHUB_NAMESPACE/$repo"
+          done
+
+  delete-repositories:
+    needs: list-repositories
+    runs-on: ubuntu-latest
+    if: needs.list-repositories.outputs.repositories != '[]'
+    strategy:
+      matrix:
+        repository: ${{ fromJson(needs.list-repositories.outputs.repositories) }}
+      fail-fast: false
+    steps:
+      - name: Delete Docker Hub repository
+        run: |
+          echo "🗑️ Processing repository: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
+          
+          # First, get repository info to verify it exists
+          repo_info=$(curl -s \
+            -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
+          
+          if echo "$repo_info" | jq -e '.name' > /dev/null; then
+            echo "✅ Repository found: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
+          
+            # Get tags count for information
+            tags_response=$(curl -s \
+              -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/tags/?page_size=100")
+          
+            tags_count=$(echo "$tags_response" | jq -r '.count // 0')
+            echo "📊 Repository contains $tags_count tag(s)"
+          
+            # Delete the entire repository (this deletes all images/tags)
+            echo "🗑️ Deleting repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}..."
+          
+            delete_response=$(curl -s -w "%{http_code}" -X DELETE \
+              -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
+          
+            http_code="${delete_response: -3}"
+            response_body="${delete_response%???}"
+          
+            case $http_code in
+              204)
+                echo "✅ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} deleted successfully"
+                ;;
+              403)
+                echo "❌ Permission denied for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
+                echo "Check namespace permissions and token scopes"
+                echo "Response: $response_body"
+                exit 1
+                ;;
+              404)
+                echo "ℹ️ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} not found or already deleted"
+                ;;
+              *)
+                echo "❌ Unexpected error for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} (HTTP $http_code)"
+                echo "Response: $response_body"
+                exit 1
+                ;;
+            esac
+          else
+            echo "ℹ️ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} not found"
+            echo "Response: $repo_info"
+          fi
+
+      - name: Repository deletion result
+        run: |
+          echo "📋 Processing completed for repository: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
+
+  cleanup-summary:
+    needs: [list-repositories, delete-repositories]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Operation summary
+        run: |
+          echo "## 📋 Docker Hub images deletion summary"
+          echo ""
+          
+          echo "🐳 **Docker Hub Namespace**: $DOCKERHUB_NAMESPACE"
+          echo ""
+          
+          if [ -n "${{ github.event.inputs.repository_name }}" ]; then
+            echo "🎯 **Target**: Repository '${{ github.event.inputs.repository_name }}'"
+          else
+            echo "🎯 **Target**: All namespace repositories"
+          fi
+          
+          echo "⚙️ **Mode**: Delete all repositories and their images"
+          echo ""
+          
+          if [ "${{ needs.list-repositories.outputs.repositories }}" == "[]" ]; then
+            echo "ℹ️ **Result**: No Docker repositories found"
+          else
+            repo_count=$(echo '${{ needs.list-repositories.outputs.repositories }}' | jq length)
+            echo "🐳 **Repositories processed**: $repo_count"
+            echo ""
+          
+            if [ "${{ needs.delete-repositories.result }}" == "success" ]; then
+              echo "✅ **Status**: Process completed successfully"
+            elif [ "${{ needs.delete-repositories.result }}" == "failure" ]; then
+              echo "❌ **Status**: Some errors occurred during deletion"
+            else
+              echo "⚠️ **Status**: Process was cancelled or skipped"
+            fi
+          fi
+          
+          echo ""
+          echo "🗑️ **Actions**: Deleted all Docker Hub repositories and images"
+          echo ""
+          echo "🕐 **Completed at**: $(date)"
