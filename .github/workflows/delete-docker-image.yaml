@@ -18,7 +18,7 @@ permissions:
 env:
   DOCKERHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_DOCKER_PASSWORD }}
   DOCKERHUB_USERNAME: ${{ secrets.QUIZ_ME_UP_DOCKER_USERNAME }}
-  DOCKERHUB_NAMESPACE: ${{ secrets.QUIZ_ME_UP_DOCKER_NAMESPACE }}
+  DOCKERHUB_NAMESPACE: quizmeup
 
 jobs:
   list-repositories:
