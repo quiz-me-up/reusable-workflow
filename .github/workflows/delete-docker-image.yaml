@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       repositories: ${{ steps.get-repositories.outputs.repositories }}
+      has_repositories: ${{ steps.get-repositories.outputs.has_repositories }}
     steps:
       - name: Verify confirmation
         if: github.event.inputs.confirm_deletion != 'CONFIRM'
@@ -42,9 +43,9 @@ jobs:
             -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
             "https://hub.docker.com/v2/users/login/")
           
-          auth_token=$(echo "$response" | jq -r '.token')
+          auth_token=$(echo "$response" | jq -r '.token // empty')
           
-          if [ "$auth_token" == "null" ] || [ -z "$auth_token" ]; then
+          if [ -z "$auth_token" ] || [ "$auth_token" == "null" ]; then
             echo "❌ Failed to authenticate with Docker Hub"
             echo "Response: $response"
             exit 1
@@ -58,33 +59,79 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.repository_name }}" ]; then
             echo "🔍 Processing specific repository: ${{ github.event.inputs.repository_name }}"
-            echo "[\"${{ github.event.inputs.repository_name }}\"]" > /tmp/repositories.json
+            repositories="[\"${{ github.event.inputs.repository_name }}\"]"
+            has_repos="true"
           else
             echo "🔍 Fetching all repositories from Docker Hub namespace: $DOCKERHUB_NAMESPACE"
           
-            # Initialize empty file for repository names
-            > /tmp/repo_names.txt
-          
-            # Fetch all repositories with pagination
+            # Initialize variables
+            all_repos=""
             page=1
+            has_repos="false"
+          
             while true; do
               echo "📄 Fetching page $page..."
           
-              repositories_response=$(curl -s \
+              repositories_response=$(curl -s -w "HTTPSTATUS:%{http_code}" \
                 -H "Authorization: JWT ${{ steps.docker-auth.outputs.auth_token }}" \
                 "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/?page=$page&page_size=100")
           
-              if [ $? -ne 0 ]; then
-                echo "❌ Failed to fetch repositories (curl error)"
-                exit 1
+              # Extract HTTP status and body
+              http_code=$(echo "$repositories_response" | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+              response_body=$(echo "$repositories_response" | sed 's/HTTPSTATUS:[0-9]*$//')
+          
+              case $http_code in
+                200)
+                  echo "✅ Successfully fetched page $page"
+                  ;;
+                401)
+                  echo "❌ Authentication failed (401) - check token validity"
+                  echo "Response: $response_body"
+                  exit 1
+                  ;;
+                403)
+                  echo "❌ Permission denied (403) - check namespace access"
+                  echo "Response: $response_body"
+                  exit 1
+                  ;;
+                404)
+                  echo "ℹ️ Namespace not found or empty (404): $DOCKERHUB_NAMESPACE"
+                  break
+                  ;;
+                429)
+                  echo "⏱️ Rate limited (429) - waiting 30 seconds..."
+                  sleep 30
+                  continue
+                  ;;
+                *)
+                  echo "❌ Unexpected HTTP status: $http_code"
+                  echo "Response: $response_body"
+                  exit 1
+                  ;;
+              esac
+          
+              # Validate JSON response
+              if ! echo "$response_body" | jq empty 2>/dev/null; then
+                echo "❌ Invalid JSON response from Docker Hub API"
+                echo "Response: $response_body"
+                break
               fi
           
-              # Extract repository names and append to file
-              echo "$repositories_response" | jq -r '.results[]?.name // empty' | grep -v '^$' >> /tmp/repo_names.txt
+              # Extract repository names from this page
+              page_repos=$(echo "$response_body" | jq -r '.results[]?.name // empty' | grep -v '^$')
+          
+              if [ -n "$page_repos" ]; then
+                if [ -n "$all_repos" ]; then
+                  all_repos="$all_repos"$'\n'"$page_repos"
+                else
+                  all_repos="$page_repos"
+                fi
+                has_repos="true"
+              fi
           
               # Check for next page
-              next_page=$(echo "$repositories_response" | jq -r '.next // empty')
-              if [ -z "$next_page" ]; then
+              next_page=$(echo "$response_body" | jq -r '.next // empty')
+              if [ -z "$next_page" ] || [ "$next_page" == "null" ]; then
                 echo "✅ Fetched all pages"
                 break
               fi
@@ -93,38 +140,44 @@ jobs:
             done
           
             # Convert to JSON array
-            if [ -s /tmp/repo_names.txt ]; then
-              jq -R -n '[inputs | select(length>0)]' < /tmp/repo_names.txt > /tmp/repositories.json
+            if [ "$has_repos" == "true" ] && [ -n "$all_repos" ]; then
+              repositories=$(echo "$all_repos" | jq -R -n '[inputs | select(length>0)]')
             else
-              echo "[]" > /tmp/repositories.json
+              repositories="[]"
+              has_repos="false"
             fi
           fi
           
-          # Read and validate JSON
-          repositories=$(cat /tmp/repositories.json)
-          
+          # Validate final JSON
           if ! echo "$repositories" | jq empty 2>/dev/null; then
             echo "❌ Invalid JSON format generated"
             echo "Generated: $repositories"
-            exit 1
+            repositories="[]"
+            has_repos="false"
           fi
           
-          # Set output using multiline format to handle special characters
+          # Set outputs
           echo "repositories<<EOF" >> $GITHUB_OUTPUT
           echo "$repositories" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "has_repositories=$has_repos" >> $GITHUB_OUTPUT
           
-          # Display repositories to process
+          # Display results
           repo_count=$(echo "$repositories" | jq length)
-          echo "🐳 Found $repo_count Docker repositories to process:"
-          echo "$repositories" | jq -r '.[]' | while read -r repo; do
-            echo " - $DOCKERHUB_NAMESPACE/$repo"
-          done
+          
+          if [ "$repo_count" -eq 0 ]; then
+            echo "ℹ️ No Docker repositories found in namespace: $DOCKERHUB_NAMESPACE"
+          else
+            echo "🐳 Found $repo_count Docker repositories to process:"
+            echo "$repositories" | jq -r '.[]' | while read -r repo; do
+              echo " - $DOCKERHUB_NAMESPACE/$repo"
+            done
+          fi
 
   delete-repositories:
     needs: list-repositories
     runs-on: ubuntu-latest
-    if: needs.list-repositories.outputs.repositories != '[]' && needs.list-repositories.outputs.repositories != ''
+    if: needs.list-repositories.outputs.has_repositories == 'true'
     strategy:
       matrix:
         repository: ${{ fromJson(needs.list-repositories.outputs.repositories) }}
@@ -140,9 +193,9 @@ jobs:
             -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
             "https://hub.docker.com/v2/users/login/")
           
-          auth_token=$(echo "$response" | jq -r '.token')
+          auth_token=$(echo "$response" | jq -r '.token // empty')
           
-          if [ "$auth_token" == "null" ] || [ -z "$auth_token" ]; then
+          if [ -z "$auth_token" ] || [ "$auth_token" == "null" ]; then
             echo "❌ Failed to re-authenticate with Docker Hub"
             echo "Response: $response"
             exit 1
@@ -155,15 +208,17 @@ jobs:
         run: |
           echo "🗑️ Processing repository: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
           
-          # Use fresh authentication token
           AUTH_TOKEN="${{ steps.fresh-auth.outputs.auth_token }}"
           
           # Verify repository exists
-          repo_info=$(curl -s \
+          repo_info=$(curl -s -w "HTTPSTATUS:%{http_code}" \
             -H "Authorization: JWT $AUTH_TOKEN" \
             "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
           
-          if echo "$repo_info" | jq -e '.name' > /dev/null 2>&1; then
+          http_code=$(echo "$repo_info" | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          response_body=$(echo "$repo_info" | sed 's/HTTPSTATUS:[0-9]*$//')
+          
+          if [ "$http_code" == "200" ] && echo "$response_body" | jq -e '.name' > /dev/null 2>&1; then
             echo "✅ Repository found: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
           
             # Get repository statistics
@@ -177,14 +232,14 @@ jobs:
             # Delete repository
             echo "🗑️ Deleting repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}..."
           
-            delete_response=$(curl -s -w "%{http_code}" -X DELETE \
+            delete_response=$(curl -s -w "HTTPSTATUS:%{http_code}" -X DELETE \
               -H "Authorization: JWT $AUTH_TOKEN" \
               "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
           
-            http_code="${delete_response: -3}"
-            response_body="${delete_response%???}"
+            delete_http_code=$(echo "$delete_response" | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+            delete_response_body=$(echo "$delete_response" | sed 's/HTTPSTATUS:[0-9]*$//')
           
-            case $http_code in
+            case $delete_http_code in
               202)
                 echo "✅ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} deletion accepted (processing asynchronously)"
                 ;;
@@ -194,27 +249,40 @@ jobs:
               401)
                 echo "❌ Authentication failed for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
                 echo "Token may have expired or insufficient permissions"
-                echo "Response: $response_body"
+                echo "Response: $delete_response_body"
                 exit 1
                 ;;
               403)
                 echo "❌ Permission denied for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
                 echo "Check namespace permissions and token scopes"
-                echo "Response: $response_body"
+                echo "Response: $delete_response_body"
                 exit 1
                 ;;
               404)
                 echo "ℹ️ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} not found or already deleted"
                 ;;
               *)
-                echo "❌ Unexpected error for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} (HTTP $http_code)"
-                echo "Response: $response_body"
+                echo "❌ Unexpected error for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} (HTTP $delete_http_code)"
+                echo "Response: $delete_response_body"
                 exit 1
                 ;;
             esac
           else
-            echo "ℹ️ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} not found"
-            echo "Response: $repo_info"
+            case $http_code in
+              404)
+                echo "ℹ️ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} not found"
+                ;;
+              401|403)
+                echo "❌ Access denied to repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} (HTTP $http_code)"
+                echo "Response: $response_body"
+                exit 1
+                ;;
+              *)
+                echo "❌ Error checking repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} (HTTP $http_code)"
+                echo "Response: $response_body"
+                exit 1
+                ;;
+            esac
           fi
 
       - name: Repository deletion result
@@ -243,8 +311,10 @@ jobs:
           echo "**⚙️ Mode:** Delete all repositories and their images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ needs.list-repositories.outputs.repositories }}" == "[]" ] || [ -z "${{ needs.list-repositories.outputs.repositories }}" ]; then
-            echo "**ℹ️ Result:** No Docker repositories found" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.list-repositories.outputs.has_repositories }}" != "true" ]; then
+            echo "**ℹ️ Result:** No Docker repositories found in namespace" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The namespace \`$DOCKERHUB_NAMESPACE\` appears to be empty or does not contain any accessible repositories." >> $GITHUB_STEP_SUMMARY
           else
             repo_count=$(echo '${{ needs.list-repositories.outputs.repositories }}' | jq length 2>/dev/null || echo "0")
             echo "**🐳 Repositories processed:** $repo_count" >> $GITHUB_STEP_SUMMARY
@@ -258,19 +328,23 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
           
             if [ "${{ needs.delete-repositories.result }}" == "success" ]; then
-              echo "**✅ Status:** Process completed successfully" >> $GITHUB_STEP_SUMMARY
+              echo "**✅ Status:** All repositories deleted successfully" >> $GITHUB_STEP_SUMMARY
             elif [ "${{ needs.delete-repositories.result }}" == "failure" ]; then
               echo "**❌ Status:** Some errors occurred during deletion" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ needs.delete-repositories.result }}" == "skipped" ]; then
+              echo "**⚠️ Status:** Deletion job was skipped" >> $GITHUB_STEP_SUMMARY
             else
-              echo "**⚠️ Status:** Process was cancelled or skipped" >> $GITHUB_STEP_SUMMARY
+              echo "**⚠️ Status:** Process was cancelled or encountered an issue" >> $GITHUB_STEP_SUMMARY
             fi
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**🗑️ Action:** Deleted Docker Hub repositories and all their images" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**🕐 Completed at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           
-          # Also output to console
-          echo "✅ Docker Hub cleanup workflow completed"
+          # Console output
+          if [ "${{ needs.list-repositories.outputs.has_repositories }}" != "true" ]; then
+            echo "ℹ️ No repositories found in Docker Hub namespace: $DOCKERHUB_NAMESPACE"
+          else
+            echo "✅ Docker Hub cleanup workflow completed"
+          fi
           echo "📊 Check the summary tab for detailed results"
