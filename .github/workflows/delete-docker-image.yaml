@@ -16,16 +16,15 @@ permissions:
   contents: read
 
 env:
-  DOCKERHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_DOCKER_PASSWORD }}
+  DOCKERHUB_TOKEN: ${{ secrets.QUIZ_ME_UP_DOCKER_TOKEN }}
   DOCKERHUB_USERNAME: ${{ secrets.QUIZ_ME_UP_DOCKER_USERNAME }}
-  DOCKERHUB_NAMESPACE: quizmeup
+  DOCKERHUB_NAMESPACE: ${{ secrets.QUIZ_ME_UP_DOCKER_NAMESPACE }}
 
 jobs:
   list-repositories:
     runs-on: ubuntu-latest
     outputs:
       repositories: ${{ steps.get-repositories.outputs.repositories }}
-      auth_token: ${{ steps.docker-auth.outputs.auth_token }}
     steps:
       - name: Verify confirmation
         if: github.event.inputs.confirm_deletion != 'CONFIRM'
@@ -131,13 +130,37 @@ jobs:
         repository: ${{ fromJson(needs.list-repositories.outputs.repositories) }}
       fail-fast: false
     steps:
+      - name: Re-authenticate with Docker Hub
+        id: fresh-auth
+        run: |
+          echo "🔐 Re-authenticating with Docker Hub for fresh token..."
+          
+          response=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
+            "https://hub.docker.com/v2/users/login/")
+          
+          auth_token=$(echo "$response" | jq -r '.token')
+          
+          if [ "$auth_token" == "null" ] || [ -z "$auth_token" ]; then
+            echo "❌ Failed to re-authenticate with Docker Hub"
+            echo "Response: $response"
+            exit 1
+          fi
+          
+          echo "✅ Successfully re-authenticated with Docker Hub"
+          echo "auth_token=$auth_token" >> $GITHUB_OUTPUT
+
       - name: Delete Docker Hub repository
         run: |
           echo "🗑️ Processing repository: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
           
+          # Use fresh authentication token
+          AUTH_TOKEN="${{ steps.fresh-auth.outputs.auth_token }}"
+          
           # Verify repository exists
           repo_info=$(curl -s \
-            -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+            -H "Authorization: JWT $AUTH_TOKEN" \
             "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
           
           if echo "$repo_info" | jq -e '.name' > /dev/null 2>&1; then
@@ -145,7 +168,7 @@ jobs:
           
             # Get repository statistics
             tags_response=$(curl -s \
-              -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+              -H "Authorization: JWT $AUTH_TOKEN" \
               "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/tags/?page_size=1")
           
             tags_count=$(echo "$tags_response" | jq -r '.count // 0')
@@ -155,7 +178,7 @@ jobs:
             echo "🗑️ Deleting repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}..."
           
             delete_response=$(curl -s -w "%{http_code}" -X DELETE \
-              -H "Authorization: JWT ${{ needs.list-repositories.outputs.auth_token }}" \
+              -H "Authorization: JWT $AUTH_TOKEN" \
               "https://hub.docker.com/v2/repositories/$DOCKERHUB_NAMESPACE/${{ matrix.repository }}/")
           
             http_code="${delete_response: -3}"
@@ -164,6 +187,12 @@ jobs:
             case $http_code in
               204)
                 echo "✅ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} deleted successfully"
+                ;;
+              401)
+                echo "❌ Authentication failed for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
+                echo "Token may have expired or insufficient permissions"
+                echo "Response: $response_body"
+                exit 1
                 ;;
               403)
                 echo "❌ Permission denied for repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
