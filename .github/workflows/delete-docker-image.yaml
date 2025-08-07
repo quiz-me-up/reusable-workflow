@@ -185,6 +185,9 @@ jobs:
             response_body="${delete_response%???}"
           
             case $http_code in
+              202)
+                echo "✅ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} deletion accepted (processing asynchronously)"
+                ;;
               204)
                 echo "✅ Repository $DOCKERHUB_NAMESPACE/${{ matrix.repository }} deleted successfully"
                 ;;
