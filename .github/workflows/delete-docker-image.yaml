@@ -263,7 +263,7 @@ jobs:
           echo "📋 Processing completed for repository: $DOCKERHUB_NAMESPACE/${{ matrix.repository }}"
 
   cleanup-summary:
-    needs: list-repositories
+    needs: [list-repositories, delete-repositories]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -305,20 +305,21 @@ jobs:
             fi
             echo "" >> $GITHUB_STEP_SUMMARY
           
-            # On vérifie si la job delete-repositories a été lancée
-            if [ -n "${{ needs.delete-repositories.result }}" ]; then
-              if [ "${{ needs.delete-repositories.result }}" == "success" ]; then
+            # Affichage du statut selon le résultat de delete-repositories
+            case "${{ needs.delete-repositories.result }}" in
+              success)
                 echo "**✅ Status:** All repositories deleted successfully" >> $GITHUB_STEP_SUMMARY
-              elif [ "${{ needs.delete-repositories.result }}" == "failure" ]; then
+                ;;
+              failure)
                 echo "**❌ Status:** Some errors occurred during deletion" >> $GITHUB_STEP_SUMMARY
-              elif [ "${{ needs.delete-repositories.result }}" == "skipped" ]; then
-                echo "**⚠️ Status:** Deletion job was skipped" >> $GITHUB_STEP_SUMMARY
-              else
+                ;;
+              skipped)
+                echo "**⚠️ Status:** Deletion job was skipped (probably no repositories to delete)" >> $GITHUB_STEP_SUMMARY
+                ;;
+              *)
                 echo "**⚠️ Status:** Process was cancelled or encountered an issue" >> $GITHUB_STEP_SUMMARY
-              fi
-            else
-              echo "**⚠️ Status:** Deletion job did not run (no repositories found)" >> $GITHUB_STEP_SUMMARY
-            fi
+                ;;
+            esac
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
